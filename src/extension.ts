@@ -79,7 +79,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   function repositoryForActiveEditor(): GitRepository | undefined {
     if (!api) { return undefined; }
     const editor = vscode.window.activeTextEditor;
-    if (editor?.document.uri.scheme === 'file') {
+    if (editor && ['file', 'vscode-remote', 'git'].includes(editor.document.uri.scheme)) {
       const path = editor.document.uri.fsPath;
       const candidates = api.repositories.filter(repo => {
         const child = relative(repo.rootUri.fsPath, path);
@@ -94,12 +94,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   function activeRepository(): GitRepository | undefined {
     if (!api) { return undefined; }
-    if (selectedRepository && api.repositories.includes(selectedRepository)) { return selectedRepository; }
     const active = repositoryForActiveEditor();
     if (active) {
       selectedRepository = active;
       return active;
     }
+    if (selectedRepository && api.repositories.includes(selectedRepository)) { return selectedRepository; }
     return api.repositories.length === 1 ? api.repositories[0] : undefined;
   }
 

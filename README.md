@@ -68,6 +68,7 @@ If several local stacks share the same trunk, choose **Select stack…** to pick
 ## Stack review overview (prototype)
 
 Click the **Stack Navigator** icon in the Activity Bar to see PRs in the current local stack.
+PRs appear from the top layer down to the layer nearest trunk. The overview follows the repository of the active code editor, including remote files and Git diffs. When no repository-backed editor is active, it keeps the last repository.
 The view opens automatically the first time a stack with PRs is detected in a workspace, without taking editor focus.
 After that, it does not reopen automatically on refresh, checkout or window reload.
 Review decisions, CI summaries and thread previews load in the background for the whole stack, two PRs at a time.

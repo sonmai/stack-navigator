@@ -80,6 +80,8 @@ test('overview expands without checkout, opens selected native thread, and dispo
     overview.update('/correct-repo', state);
     assert.equal(revealed.length, 1, 'refresh does not reopen the view');
     assert.equal(roots.length, 2);
+    assert.deepEqual(roots.map((node: any) => node.branch.name), ['ui', 'api'], 'top layer first');
+    assert.deepEqual(state.stack.branches.map((branch: any) => branch.name), ['api', 'ui'], 'navigation order is unchanged');
     const children = await overview.getChildren(roots[1]);
     assert.equal(checkouts, 0);
     await overview.getChildren(roots[1]); assert.equal(reads, 2, 'both PRs prefetched and cached when expanded again');
@@ -117,10 +119,11 @@ test('overview expands without checkout, opens selected native thread, and dispo
     const flush = () => new Promise(resolve => setImmediate(resolve));
     queued.update('/repo', many);
     const prs = await queued.getChildren();
-    assert.deepEqual(requests.map(r => r.url.slice(-1)), ['3', '1'], 'current PR first, at most two concurrent');
+    assert.deepEqual(prs.map((node: any) => node.branch.pr.number), [4, 3, 2, 1]);
+    assert.deepEqual(requests.map(r => r.url.slice(-1)), ['3', '4'], 'current PR first, at most two concurrent');
     const expanding = queued.getChildren(prs[3]);
     requests[0].finish(pr); await flush();
-    assert.equal(requests[2].url.slice(-1), '4', 'expanded PR jumps ahead of queued background work');
+    assert.equal(requests[2].url.slice(-1), '1', 'expanded PR jumps ahead of queued background work');
     requests[1].finish(pr); requests[2].finish(pr); await flush();
     assert.equal(requests[3].url.slice(-1), '2');
     requests[3].finish(pr); await expanding; await flush();
