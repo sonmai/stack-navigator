@@ -4,7 +4,7 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { NavState, StackBranch } from './core';
 import { ReviewPr, Reviews, ReviewThread, safeReviewPath, snapshotAnchor } from './reviews';
 
-interface PrNode { kind: 'pr'; root: string; branch: StackBranch; data?: ReviewPr; error?: string }
+interface PrNode { kind: 'pr'; root: string; branch: StackBranch; data?: ReviewPr; error?: string; loading?: boolean }
 interface ThreadNode { kind: 'thread'; pr: PrNode; thread: ReviewThread }
 type Node = PrNode | ThreadNode;
 type Navigate = (root: string, action: () => Promise<void>) => Promise<void>;
@@ -21,7 +21,9 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
   private key = '';
   private currentBranch = '';
   private reads = new AbortController();
-  private pending = new Map<PrNode, Promise<Node[]>>();
+  private pending = new Map<PrNode, { promise: Promise<Node[]>; resolve: (nodes: Node[]) => void; signal: AbortSignal }>();
+  private queue: PrNode[] = [];
+  private activeLoads = 0;
   private thread?: vscode.CommentThread;
   private opening = false;
   private disposed = false;
@@ -40,7 +42,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
       vscode.workspace.onDidCloseTextDocument(doc => {
         if (doc.uri.scheme === 'stacknav-review') { this.documents.delete(doc.uri.toString()); }
       }));
-    this.view.message = 'Open a local stack to see its PRs. Expand a PR to load review threads.';
+    this.view.message = 'Open a local stack to see its PRs and review threads.';
   }
 
   update(root: string | undefined, state: NavState): void {
@@ -51,17 +53,19 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
     const key = JSON.stringify([root, branches.map(b => [b.name, b.pr?.url])]);
     if (key === this.key) {
       this.nodes.forEach(node => { node.branch = branches.find(b => b.name === node.branch.name)!; });
+      this.queue.sort((a, b) => Number(b.branch.isCurrent) - Number(a.branch.isCurrent));
       this.changed.fire(undefined);
       return;
     }
     this.key = key;
-    this.reads.abort(); this.reads = new AbortController(); this.pending.clear();
+    this.cancelLoads();
     this.thread?.dispose(); this.thread = undefined;
     this.nodes = root ? branches.filter(b => b.pr).map(branch => ({ kind: 'pr', root, branch })) : [];
     this.view.message = this.nodes.length
-      ? 'Preview: expand a PR to load reviews. Click a thread to check out its branch and open code.'
+      ? 'Click a review thread to check out its branch and open code.'
       : 'Open a local stack to see its PRs. For multiple stacks on trunk, select a stack first.';
     this.changed.fire(undefined);
+    this.prefetch();
     void this.openInitially();
   }
 
@@ -77,9 +81,61 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
   }
 
   private refresh(): void {
-    this.reads.abort(); this.reads = new AbortController(); this.pending.clear();
-    this.nodes.forEach(node => { node.data = undefined; node.error = undefined; });
+    this.cancelLoads();
+    this.nodes.forEach(node => { node.error = undefined; });
+    this.prefetch();
     this.changed.fire(undefined);
+  }
+
+  private cancelLoads(): void {
+    this.reads.abort(); this.reads = new AbortController();
+    for (const [node, job] of this.pending) { node.loading = false; job.resolve(this.children(node)); }
+    this.pending.clear(); this.queue = [];
+  }
+
+  private children(node: PrNode): Node[] {
+    return node.data?.threads.map(thread => ({ kind: 'thread', pr: node, thread })) ?? [];
+  }
+
+  private prefetch(): void {
+    for (const node of [...this.nodes].sort((a, b) => Number(b.branch.isCurrent) - Number(a.branch.isCurrent))) {
+      this.enqueue(node);
+    }
+    this.pump();
+  }
+
+  private enqueue(node: PrNode): Promise<Node[]> {
+    const existing = this.pending.get(node);
+    if (existing) { return existing.promise; }
+    let complete!: (nodes: Node[]) => void;
+    const promise = new Promise<Node[]>(resolve => { complete = resolve; });
+    this.pending.set(node, { promise, resolve: complete, signal: this.reads.signal });
+    node.loading = true;
+    this.queue.push(node);
+    return promise;
+  }
+
+  private pump(): void {
+    while (!this.disposed && this.activeLoads < 2 && this.queue.length) {
+      const node = this.queue.shift()!;
+      const job = this.pending.get(node)!;
+      this.activeLoads++;
+      void (async () => {
+        try {
+          const data = await this.reviews.read(node.root, node.branch.pr!.url, job.signal, true);
+          if (!job.signal.aborted) { node.data = data; node.error = undefined; }
+        } catch (error) {
+          if (!job.signal.aborted) { node.error = String(error); }
+        } finally {
+          this.activeLoads--;
+          if (this.pending.get(node) === job) {
+            this.pending.delete(node); node.loading = false;
+            job.resolve(this.children(node)); this.changed.fire(node);
+          }
+          this.pump();
+        }
+      })();
+    }
   }
 
   getParent(node: Node): Node | undefined {
@@ -91,9 +147,10 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
       const item = new vscode.TreeItem(`#${node.branch.pr!.number} ${node.data?.title ?? this.titleFor(node.branch.pr!.url) ?? node.branch.name}`, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = `${node.root}:${node.branch.pr!.url}`;
       item.iconPath = new vscode.ThemeIcon(node.branch.isCurrent ? 'check' : 'git-pull-request');
-      item.description = node.error ? 'Load failed: click Refresh' : node.data
+      item.description = node.data
         ? `${node.data.isDraft ? 'DRAFT' : node.data.state} · ${node.data.reviewDecision ?? 'No review decision'} · CI: ${node.data.checks ?? 'None'} · ${node.data.threads.filter(t => !t.isResolved).length} unresolved`
-        : `${node.branch.pr!.state} · expand to load reviews`;
+        : node.branch.pr!.state;
+      item.description += node.error ? ' · Load failed: click Refresh' : node.loading ? (node.data ? ' · Updating…' : ' · Loading reviews…') : '';
       item.tooltip = node.error ?? `${node.root}\n${node.branch.name}`;
       return item;
     }
@@ -102,7 +159,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
     item.id = `${node.pr.root}:${node.thread.id}`;
     item.description = `${node.thread.path}${node.thread.line ? `:${node.thread.line}` : ''}${node.thread.isOutdated ? ' · outdated' : ''}`;
     item.iconPath = new vscode.ThemeIcon(node.thread.isResolved ? 'pass' : 'comment-discussion');
-    item.tooltip = `${node.thread.isResolved ? 'Resolved' : 'Unresolved'} · ${node.thread.comments.length} comments\nClick to check out ${node.pr.branch.name} and open this thread.`;
+    item.tooltip = `${node.thread.isResolved ? 'Resolved' : 'Unresolved'} · ${node.thread.commentCount ?? node.thread.comments.length} comments\nClick to check out ${node.pr.branch.name} and open this thread.`;
     item.command = { command: 'stacknav.openReviewThread', title: 'Open Review Thread', arguments: [node] };
     return item;
   }
@@ -110,23 +167,13 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
   async getChildren(node?: Node): Promise<Node[]> {
     if (!node) { return this.nodes; }
     if (node.kind === 'thread') { return []; }
+    if (!this.nodes.includes(node)) { return []; }
+    const index = this.queue.indexOf(node);
+    if (index >= 0) { this.queue.splice(index, 1); this.queue.unshift(node); }
+    if (node.data) { return this.children(node); }
     if (node.error) { return []; }
-    if (node.data) { return node.data.threads.map(thread => ({ kind: 'thread', pr: node, thread })); }
-    if (this.pending.has(node)) { return this.pending.get(node)!; }
-    const signal = this.reads.signal;
-    const promise = (async (): Promise<Node[]> => {
-      try {
-        const data = await this.reviews.read(node.root, node.branch.pr!.url, signal);
-        if (signal.aborted) { return []; }
-        node.data = data; node.error = undefined;
-        this.changed.fire(node);
-        return data.threads.map(thread => ({ kind: 'thread', pr: node, thread }));
-      } catch (error) {
-        if (!signal.aborted) { node.error = String(error); this.changed.fire(node); }
-        return [];
-      } finally { if (!signal.aborted) { this.pending.delete(node); } }
-    })();
-    this.pending.set(node, promise);
+    const promise = this.enqueue(node);
+    this.pump();
     return promise;
   }
 
@@ -147,7 +194,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
           const choice = await vscode.window.showWarningMessage(`Checkout stopped: ${String(error)}`, 'View read-only');
           if (choice !== 'View read-only') { return; }
         }
-        const fresh = await this.reviews.read(node.pr.root, node.pr.branch.pr!.url);
+        const fresh = await this.reviews.readThread(node.pr.root, node.pr.branch.pr!.url, node.thread.id);
         if (this.disposed || !this.nodes.includes(node.pr)) { return; }
         const thread = fresh.threads.find(t => t.id === node.thread.id);
         if (!thread) { throw new Error('This thread no longer exists. Refresh the overview.'); }
@@ -205,7 +252,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
   }
 
   dispose(): void {
-    this.disposed = true; this.reads.abort(); this.thread?.dispose(); this.documents.clear();
+    this.disposed = true; this.cancelLoads(); this.reads.abort(); this.thread?.dispose(); this.documents.clear();
     this.disposables.forEach(d => d.dispose());
   }
 }

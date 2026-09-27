@@ -17,6 +17,7 @@ export interface ReviewThread {
   isOutdated: boolean;
   isResolved: boolean;
   comments: ReviewComment[];
+  commentCount?: number;
 }
 export interface ReviewPr {
   title: string;
@@ -53,14 +54,14 @@ export function snapshotAnchor(pr: ReviewPr, thread: ReviewThread): { sha: strin
 export class Reviews {
   constructor(private readonly gh: Runner = runGh, private readonly git: Runner = runGit) {}
 
-  async read(root: string, url: string, signal?: AbortSignal): Promise<ReviewPr> {
+  async read(root: string, url: string, signal?: AbortSignal, summary = false): Promise<ReviewPr> {
     const identity = prIdentity(url);
     const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String) {
       repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
         title state isDraft reviewDecision headRefOid statusCheckRollup { state }
         reviewThreads(first:50,after:$cursor) { pageInfo { hasNextPage endCursor } nodes {
           id path line originalLine diffSide isOutdated isResolved
-          comments(first:50) { pageInfo { hasNextPage endCursor } nodes { ${commentFields} } }
+          comments(first:${summary ? 1 : 50}) { totalCount pageInfo { hasNextPage endCursor } nodes { ${summary ? 'body author { login }' : commentFields} } }
         } }
       } }
     }`;
@@ -77,7 +78,7 @@ export class Reviews {
       for (const raw of pr.reviewThreads.nodes) {
         const comments = [...raw.comments.nodes] as ReviewComment[];
         let next = raw.comments.pageInfo;
-        while (next.hasNextPage) {
+        while (!summary && next.hasNextPage) {
           if (!next.endCursor) { throw new Error('Missing comment pagination cursor.'); }
           const previousCursor = next.endCursor;
           const more = await this.graph(root, identity.host,
@@ -88,10 +89,41 @@ export class Reviews {
           next = more.node.comments.pageInfo;
           if (next.hasNextPage && next.endCursor === previousCursor) { throw new Error('Invalid comment pagination cursor.'); }
         }
-        result.threads.push({ ...raw, comments });
+        result.threads.push({ ...raw, comments, commentCount: raw.comments.totalCount ?? comments.length });
       }
       const page = pr.reviewThreads.pageInfo;
       if (page.hasNextPage && (!page.endCursor || page.endCursor === cursor)) { throw new Error('Invalid thread pagination cursor.'); }
+      cursor = page.hasNextPage ? page.endCursor : undefined;
+    } while (cursor);
+    return result!;
+  }
+
+  async readThread(root: string, url: string, id: string, signal?: AbortSignal): Promise<ReviewPr> {
+    const identity = prIdentity(url);
+    let cursor: string | undefined;
+    let result: ReviewPr | undefined;
+    do {
+      const data = await this.graph(root, identity.host,
+        `query($id:ID!,$cursor:String) { node(id:$id) { ... on PullRequestReviewThread {
+          id path line originalLine diffSide isOutdated isResolved
+          pullRequest { url title state isDraft reviewDecision headRefOid statusCheckRollup { state } }
+          comments(first:50,after:$cursor) { totalCount nodes { ${commentFields} } pageInfo { hasNextPage endCursor } }
+        } } }`, { id, ...(cursor ? { cursor } : {}) }, signal);
+      const raw = data.node;
+      if (!raw?.pullRequest || normalizePrUrl(raw.pullRequest.url) !== normalizePrUrl(url)) {
+        throw new Error('This thread no longer exists or belongs to a different PR.');
+      }
+      if (result && (result.headRefOid !== raw.pullRequest.headRefOid ||
+        result.threads[0].line !== raw.line || result.threads[0].isOutdated !== raw.isOutdated)) {
+        throw new Error('PR changed while loading the thread. Select it again.');
+      }
+      if (!result) {
+        result = { ...raw.pullRequest, checks: raw.pullRequest.statusCheckRollup?.state,
+          threads: [{ ...raw, comments: [], commentCount: raw.comments.totalCount }] };
+      }
+      result!.threads[0].comments.push(...raw.comments.nodes);
+      const page = raw.comments.pageInfo;
+      if (page.hasNextPage && (!page.endCursor || page.endCursor === cursor)) { throw new Error('Invalid comment pagination cursor.'); }
       cursor = page.hasNextPage ? page.endCursor : undefined;
     } while (cursor);
     return result!;

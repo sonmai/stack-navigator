@@ -43,6 +43,35 @@ test('GraphQL partial errors fail rather than show incomplete counts', async () 
   await assert.rejects(service.read('/repo', 'https://github.com/o/r/pull/1'), /complete review data/);
 });
 
+test('summary fetch loads one comment and counts replies without following reply pages', async () => {
+  let calls = 0;
+  const service = new Reviews(async args => {
+    calls++;
+    assert.match(args.join(' '), /comments\(first:1\)/);
+    assert.doesNotMatch(args.join(' '), /diffHunk/);
+    return payload([{ ...thread, comments: { ...page([comment], true, 'replies'), totalCount: 73 } }]);
+  });
+  const result = await service.read('/repo', 'https://github.com/o/r/pull/1', undefined, true);
+  assert.equal(calls, 1);
+  assert.equal(result.threads[0].comments.length, 1);
+  assert.equal(result.threads[0].commentCount, 73);
+});
+
+test('selected-thread loading paginates only that thread and checks PR identity', async () => {
+  let calls = 0;
+  const service = new Reviews(async args => {
+    calls++;
+    assert.ok(args.includes('id=T1'));
+    assert.doesNotMatch(args.join(' '), /reviewThreads/);
+    return JSON.stringify({ data: { node: { ...thread, pullRequest: { ...pr, url: 'https://github.com/o/r/pull/1' },
+      comments: page([comment], calls === 1, 'next') } } });
+  });
+  const result = await service.readThread('/repo', 'https://github.com/o/r/pull/1', 'T1');
+  assert.equal(calls, 2);
+  assert.equal(result.threads[0].comments.length, 2);
+  await assert.rejects(service.readThread('/repo', 'https://github.com/other/r/pull/1', 'T1'), /different PR/);
+});
+
 test('checkout validates current stack membership and uses non-forced local switch', async () => {
   const calls: string[][] = [];
   const stack = JSON.stringify({ trunk: 'main', currentBranch: 'main', branches: [
