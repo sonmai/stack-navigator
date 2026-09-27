@@ -6,6 +6,7 @@ import { ReviewPr, Reviews, ReviewThread, safeReviewPath, snapshotAnchor } from 
 
 interface PrNode { kind: 'pr'; root: string; branch: StackBranch; data?: ReviewPr; error?: string; loading?: boolean }
 interface ThreadNode { kind: 'thread'; pr: PrNode; thread: ReviewThread }
+interface ThreadTarget { root: string; prUrl: string; threadId: string }
 type Node = PrNode | ThreadNode;
 type Navigate = (root: string, action: () => Promise<void>) => Promise<void>;
 
@@ -31,14 +32,19 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
   private autoOpenAttempted = false;
 
   constructor(private readonly navigate: Navigate, private readonly titleFor: (url: string) => string | undefined = () => undefined,
-    private readonly workspaceState?: vscode.Memento) {
+    private readonly workspaceState?: vscode.Memento, refreshStack?: () => Promise<void>) {
     this.view = vscode.window.createTreeView('stacknav.overview', { treeDataProvider: this });
     this.disposables.push(this.view, this.controller, this.changed,
       vscode.workspace.registerTextDocumentContentProvider('stacknav-review', {
         provideTextDocumentContent: uri => this.documents.get(uri.toString()) ?? ''
       }),
-      vscode.commands.registerCommand('stacknav.refreshOverview', () => this.refresh()),
-      vscode.commands.registerCommand('stacknav.openReviewThread', (node: ThreadNode) => this.open(node)),
+      vscode.commands.registerCommand('stacknav.refreshOverview', async () => {
+        const previousKey = this.key;
+        await refreshStack?.();
+        // A different stack already starts its own prefetch in update().
+        if (this.key === previousKey) { this.refresh(); }
+      }),
+      vscode.commands.registerCommand('stacknav.openReviewThread', (target: ThreadTarget) => this.open(target)),
       vscode.workspace.onDidCloseTextDocument(doc => {
         if (doc.uri.scheme === 'stacknav-review') { this.documents.delete(doc.uri.toString()); }
       }));
@@ -55,18 +61,26 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
       this.nodes.forEach(node => { node.branch = branches.find(b => b.name === node.branch.name)!; });
       this.queue.sort((a, b) => Number(b.branch.isCurrent) - Number(a.branch.isCurrent));
       this.changed.fire(undefined);
+      this.updateMessage(state);
       return;
     }
     this.key = key;
     this.cancelLoads();
     this.thread?.dispose(); this.thread = undefined;
     this.nodes = root ? branches.filter(b => b.pr).reverse().map(branch => ({ kind: 'pr', root, branch })) : [];
-    this.view.message = this.nodes.length
-      ? 'Click a review thread to check out its branch and open code.'
-      : 'Open a local stack to see its PRs. For multiple stacks on trunk, select a stack first.';
+    this.updateMessage(state);
     this.changed.fire(undefined);
     this.prefetch();
     void this.openInitially();
+  }
+
+  private updateMessage(state: NavState): void {
+    this.view.message = this.nodes.length
+      ? 'Click a review thread to check out its branch and open code.'
+      : state.type === 'error' ? state.message
+      : state.type === 'stacks' ? 'Multiple stacks found. Run Stack Navigator: Select Stack… to choose one.'
+      : state.type === 'unloaded' ? `Run Stack Navigator: Load Stack for Current PR to load #${state.pr.number}.`
+      : 'No local stack found in this repository. Run Stack Navigator: Refresh to retry.';
   }
 
   private async openInitially(): Promise<void> {
@@ -146,10 +160,15 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
     if (node.kind === 'pr') {
       const item = new vscode.TreeItem(`#${node.branch.pr!.number} ${node.data?.title ?? this.titleFor(node.branch.pr!.url) ?? node.branch.name}`, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = `${node.root}:${node.branch.pr!.url}`;
-      item.iconPath = new vscode.ThemeIcon(node.branch.isCurrent ? 'check' : 'git-pull-request');
+      const state = node.data?.state ?? node.branch.pr!.state;
+      item.iconPath = new vscode.ThemeIcon(state === 'MERGED' ? 'git-merge'
+        : state === 'CLOSED' ? 'git-pull-request-closed'
+        : node.data?.reviewDecision === 'APPROVED' ? 'check'
+        : node.data?.isDraft ? 'git-pull-request-draft' : 'git-pull-request');
       item.description = node.data
         ? `${node.data.isDraft ? 'DRAFT' : node.data.state} · ${node.data.reviewDecision ?? 'No review decision'} · CI: ${node.data.checks ?? 'None'} · ${node.data.threads.filter(t => !t.isResolved).length} unresolved`
         : node.branch.pr!.state;
+      if (node.branch.isCurrent) { item.description = `Current · ${item.description}`; }
       item.description += node.error ? ' · Load failed: click Refresh' : node.loading ? (node.data ? ' · Updating…' : ' · Loading reviews…') : '';
       item.tooltip = node.error ?? `${node.root}\n${node.branch.name}`;
       return item;
@@ -160,7 +179,9 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
     item.description = `${node.thread.path}${node.thread.line ? `:${node.thread.line}` : ''}${node.thread.isOutdated ? ' · outdated' : ''}`;
     item.iconPath = new vscode.ThemeIcon(node.thread.isResolved ? 'pass' : 'comment-discussion');
     item.tooltip = `${node.thread.isResolved ? 'Resolved' : 'Unresolved'} · ${node.thread.commentCount ?? node.thread.comments.length} comments\nClick to check out ${node.pr.branch.name} and open this thread.`;
-    item.command = { command: 'stacknav.openReviewThread', title: 'Open Review Thread', arguments: [node] };
+    item.command = { command: 'stacknav.openReviewThread', title: 'Open Review Thread', arguments: [{
+      root: node.pr.root, prUrl: node.pr.branch.pr!.url, threadId: node.thread.id
+    } satisfies ThreadTarget] };
     return item;
   }
 
@@ -177,8 +198,17 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
     return promise;
   }
 
-  private async open(node: ThreadNode): Promise<void> {
-    if (this.opening || !this.nodes.includes(node.pr)) { return; }
+  private async open(target: ThreadTarget): Promise<void> {
+    if (this.opening) { return; }
+    // Commands can outlive a tree refresh. Resolve stable IDs against the current tree,
+    // instead of silently dropping clicks when their cached node object was replaced.
+    const pr = this.nodes.find(node => node.root === target?.root && node.branch.pr?.url === target.prUrl);
+    const selected = pr?.data?.threads.find(thread => thread.id === target.threadId);
+    if (!pr || !selected) {
+      void vscode.window.showWarningMessage('This review item is no longer available. Refresh the overview and select the comment again.');
+      return;
+    }
+    const node: ThreadNode = { kind: 'thread', pr, thread: selected };
     this.opening = true;
     try {
       await this.navigate(node.pr.root, async () => {
