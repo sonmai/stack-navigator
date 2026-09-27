@@ -17,6 +17,8 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 - Close the view, refresh, switch branches and reload the window. Confirm it does not reopen automatically.
 - Click the Activity Bar icon to reopen the view. Confirm PR numbers, titles and current-branch marker.
 - Expand both PRs without checking them out. Confirm decision, CI and unresolved counts.
+- Confirm only approved open PRs have a checkmark. A checked-out PR has a Current label,
+  independently of approval. Merged and closed PRs use their own icons.
 - Wait for background loading, then expand other PRs: comments should appear without a new request.
 - During initial loading, expand a queued PR and confirm it is loaded before other queued PRs.
 - Refresh and confirm existing threads remain visible with an Updating label until replaced.
@@ -24,6 +26,10 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
   branch, the correct file opens and the selected thread is expanded at the correct line.
 - Repeat in a second repository, including matching filenames across repositories.
 - Confirm the tree stays expanded and retains its identity after checkout.
+- Trigger a stack read failure, confirm its error is shown instead of the no-stack message,
+  then retry with the sidebar Refresh button. Confirm the stack and threads return.
+- Refresh or switch away and back before clicking a previously rendered comment.
+  Confirm it opens the same PR/thread, or explicitly reports that the item is no longer available.
 - Change the local file or add unpushed commits. Confirm mismatched content opens read-only.
 - Try a LEFT-side thread and an outdated thread. Verify the label distinguishes a full
   historical snapshot from a diff excerpt. No guessed line may be used in the working file.

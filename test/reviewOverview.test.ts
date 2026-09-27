@@ -21,7 +21,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
   }
   const vscode = {
     EventEmitter: Emitter,
-    TreeItem: class { constructor(public label: string) {} }, ThemeIcon: class {},
+    TreeItem: class { constructor(public label: string) {} }, ThemeIcon: class { constructor(public id: string) {} },
     TreeItemCollapsibleState: { Collapsed: 1 },
     CommentMode: { Preview: 0 }, CommentThreadState: { Resolved: 1, Unresolved: 0 },
     CommentThreadCollapsibleState: { Expanded: 1 }, TextEditorRevealType: { InCenter: 1 },
@@ -85,7 +85,21 @@ test('overview expands without checkout, opens selected native thread, and dispo
     const children = await overview.getChildren(roots[1]);
     assert.equal(checkouts, 0);
     await overview.getChildren(roots[1]); assert.equal(reads, 2, 'both PRs prefetched and cached when expanded again');
-    await commands.get('stacknav.openReviewThread')!(children[0]);
+    const currentItem = overview.getTreeItem(roots[1]);
+    assert.equal(currentItem.iconPath.id, 'git-pull-request', 'checkout does not imply approval');
+    assert.match(currentItem.description, /^Current ·/);
+    roots[0].data = { ...pr, reviewDecision: 'APPROVED' };
+    assert.equal(overview.getTreeItem(roots[0]).iconPath.id, 'check');
+    assert.doesNotMatch(overview.getTreeItem(roots[0]).description, /Current/);
+    roots[1].data = { ...pr, reviewDecision: 'APPROVED' };
+    assert.equal(overview.getTreeItem(roots[1]).iconPath.id, 'check');
+    assert.match(overview.getTreeItem(roots[1]).description, /^Current ·/);
+    roots[0].data = { ...pr, state: 'MERGED', reviewDecision: 'APPROVED' };
+    assert.equal(overview.getTreeItem(roots[0]).iconPath.id, 'git-merge');
+    roots[0].data = { ...pr, state: 'CLOSED' };
+    assert.equal(overview.getTreeItem(roots[0]).iconPath.id, 'git-pull-request-closed');
+    const target = JSON.parse(JSON.stringify(overview.getTreeItem(children[0]).command.arguments[0]));
+    await commands.get('stacknav.openReviewThread')!(target);
     assert.equal(checkouts, 1);
     assert.equal(navigationRoot, '/correct-repo');
     assert.equal(threads[0].canReply, false);
@@ -99,7 +113,11 @@ test('overview expands without checkout, opens selected native thread, and dispo
     assert.equal((await overview.getChildren())[1], roots[1], 'checkout keeps tree identity');
     assert.equal(revealed.length, 1, 'checkout does not reopen the view');
     Reviews.prototype.checkout = async () => { throw new Error('Local changes'); };
-    await commands.get('stacknav.openReviewThread')!(children[0]);
+    // A command created before the tree is rebuilt must still resolve the same PR/thread.
+    overview.update('/other-repo', state);
+    overview.update('/correct-repo', state);
+    await overview.getChildren((await overview.getChildren())[1]);
+    await commands.get('stacknav.openReviewThread')!(target);
     assert.equal(opened.length, 2, 'blocked checkout can still open read-only');
     const reloaded = new ReviewOverview(async () => {}, undefined, workspaceState);
     reloaded.update('/correct-repo', state);

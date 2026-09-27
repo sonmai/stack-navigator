@@ -74,13 +74,14 @@ After that, it does not reopen automatically on refresh, checkout or window relo
 Review decisions, CI summaries and thread previews load in the background for the whole stack, two PRs at a time.
 The current PR loads first; expanding another PR prioritizes it in the queue. Each preview includes the first comment and total comment count.
 Expanding does not change branches. Click a thread to check out its local branch and open its code with a read-only native comment thread.
+The **Current** label marks the checked-out branch. A checkmark means the PR's review decision is **APPROVED**; merged and closed PRs have their own icons.
 
 - Matching local files open for editing; outdated comments or differing local content open a read-only PR revision.
 - Comments on the old side of a diff show the original diff excerpt, not a guessed location in the working file. Missing historical revisions use the same fallback.
 - Checkout never stashes, resets, rebases or forces changes. If blocked, choose **View read-only** to inspect the comment without completing checkout.
 - Unsaved file editors must be saved or closed before checkout. The prototype checks all open file editors conservatively.
 - Full replies are fetched only for the thread you click, along with fresh code coordinates.
-- Use the view's **Refresh** button to reload reviews. Existing data stays visible while updating, and checkout within the same stack retains the cache. There is no periodic polling yet.
+- Use the view's **Refresh** button to reload the local stack and reviews, including after a load failure. Existing reviews stay visible while updating within the same stack, and checkout within the same stack retains the cache. There is no periodic polling yet.
 - Reply, resolve, general PR conversation comments and advanced filters are not included. Only the selected thread is displayed by Stack Navigator.
 
 This prototype still needs interactive testing alongside GitHub Pull Requests to check for duplicate comment widgets and editor focus behavior. See [the validation checklist](docs/review-overview-validation.md).

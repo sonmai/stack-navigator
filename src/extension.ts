@@ -61,7 +61,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let busy = false;
-  let dirty = false;
   let reads: AbortController | undefined;
   let selectedRepository: GitRepository | undefined;
   let updatePicker: (() => void) | undefined;
@@ -73,7 +72,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!repo) { throw new Error('The repository is no longer open.'); }
     selectedRepository = repo;
     await perform('Open review thread', async () => { await action(); return ''; }, true, root);
-  }, url => titles.peek(url)?.title, context.workspaceState);
+  }, url => titles.peek(url)?.title, context.workspaceState, () => refresh());
   context.subscriptions.push(overview);
 
   function repositoryForActiveEditor(): GitRepository | undefined {
@@ -204,7 +203,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   async function refresh(): Promise<void> {
     if (disposed) { return; }
-    if (busy) { dirty = true; return; }
+    if (busy) { return; } // perform always refreshes after navigation completes.
     const ticket = ++generation;
     reads?.abort();
     reads = new AbortController();
@@ -269,7 +268,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   function scheduleRefresh(): void {
     if (disposed) { return; }
     reads?.abort();
-    if (busy) { dirty = true; return; }
+    if (busy) { return; } // perform always refreshes after navigation completes.
     if (timer) { clearTimeout(timer); }
     timer = setTimeout(() => { timer = undefined; void refresh(); }, 250);
   }
@@ -323,7 +322,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const root = explicitRoot ?? currentRoot();
     if (!root) { await refresh(); return; }
     busy = true;
-    stateRoot = undefined;
+    // Keep the displayed stack attached to its repository while navigation runs.
+    // busy already prevents another operation from using the old stack state.
+    ++generation;
+    if (timer) { clearTimeout(timer); timer = undefined; }
     reads?.abort();
     let failure: unknown;
     try {
@@ -331,7 +333,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (showProgress) {
         await vscode.window.withProgress({
           location: vscode.ProgressLocation.Notification,
-          title: 'Stack Navigator: Loading stack for review…',
+          title: `Stack Navigator: ${label}…`,
           cancellable: false
         }, () => action(root));
       } else {
@@ -342,8 +344,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       failure = error;
     } finally {
       busy = false;
-      if (dirty) { dirty = false; scheduleRefresh(); }
-      else { await refresh(); }
+      await refresh();
     }
     if (failure) {
       const detail = failure instanceof RepositoryMismatchError ? failure.message
@@ -351,7 +352,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ? 'The local stack has a different composition. Resolve that conflict manually before loading.'
         : failure instanceof CliError && /remote\.pushDefault|multiple remotes|choose.*remote/i.test(failure.message)
           ? 'Set Git remote.pushDefault for this repository, then try again.'
-          : 'See Output for details.';
+          : failure instanceof Error ? failure.message : 'See Output for details.';
       const choice = await vscode.window.showErrorMessage(`Stack Navigator: ${label} failed. ${detail}`, 'Show Output');
       if (choice) { output.show(true); }
     }
