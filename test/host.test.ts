@@ -145,6 +145,17 @@ test('host retains busy HEAD changes, replaces listeners, cancels stale reads an
     editorChanged.fire();
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(calls.at(-1), '/a');
+    window.activeTextEditor.document.uri = { scheme: 'vscode-remote', fsPath: '/c/src/file.ts' };
+    await commands.get('stacknav.refresh')!();
+    assert.equal(calls.at(-1), '/c', 'remote file overrides remembered repo even without an editor event');
+    window.activeTextEditor.document.uri = { scheme: 'git', fsPath: '/a/src/file.ts' };
+    editorChanged.fire();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(calls.at(-1), '/a', 'Git diff editor follows its owning repo');
+    window.activeTextEditor = undefined;
+    editorChanged.fire();
+    await commands.get('stacknav.refresh')!();
+    assert.equal(calls.at(-1), '/a', 'sidebar/terminal focus retains the last repository');
   } finally {
     for (const subscription of subscriptions) { subscription.dispose(); }
     LocalStacks.prototype.list = originalList; LocalStacks.prototype.enter = originalEnter;

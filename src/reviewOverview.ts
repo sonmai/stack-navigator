@@ -60,7 +60,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
     this.key = key;
     this.cancelLoads();
     this.thread?.dispose(); this.thread = undefined;
-    this.nodes = root ? branches.filter(b => b.pr).map(branch => ({ kind: 'pr', root, branch })) : [];
+    this.nodes = root ? branches.filter(b => b.pr).reverse().map(branch => ({ kind: 'pr', root, branch })) : [];
     this.view.message = this.nodes.length
       ? 'Click a review thread to check out its branch and open code.'
       : 'Open a local stack to see its PRs. For multiple stacks on trunk, select a stack first.';
