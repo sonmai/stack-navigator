@@ -21,8 +21,13 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "stacknav", "title": "Stack Navigator", "icon": "media/activity-bar.svg" }
+      ]
+    },
     "views": {
-      "explorer": [
+      "stacknav": [
         { "id": "stacknav.overview", "name": "Stack Navigator", "contextualTitle": "Stack Review Overview" }
       ]
     },

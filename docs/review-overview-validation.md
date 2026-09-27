@@ -12,7 +12,10 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 
 ## Checklist
 
-- Expand Stack Navigator in Explorer. Confirm PR numbers, titles and current-branch marker.
+- Confirm the Stack Navigator icon is visible in the Activity Bar.
+- In a fresh workspace, confirm detecting a stack opens the view once without taking editor focus.
+- Close the view, refresh, switch branches and reload the window. Confirm it does not reopen automatically.
+- Click the Activity Bar icon to reopen the view. Confirm PR numbers, titles and current-branch marker.
 - Expand both PRs without checking them out. Confirm decision, CI and unresolved counts.
 - Click an unresolved RIGHT-side thread on another PR. Confirm only the owning repo changes
   branch, the correct file opens and the selected thread is expanded at the correct line.

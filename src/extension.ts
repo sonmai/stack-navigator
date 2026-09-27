@@ -73,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!repo) { throw new Error('The repository is no longer open.'); }
     selectedRepository = repo;
     await perform('Open review thread', async () => { await action(); return ''; }, true, root);
-  }, url => titles.peek(url)?.title);
+  }, url => titles.peek(url)?.title, context.workspaceState);
   context.subscriptions.push(overview);
 
   function repositoryForActiveEditor(): GitRepository | undefined {
