@@ -237,36 +237,42 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
 
   private async show(node: PrNode, pr: ReviewPr, thread: ReviewThread, checkout: boolean): Promise<void> {
     if (!safeReviewPath(thread.path)) { throw new Error('Unsafe review file path.'); }
-    const anchor = snapshotAnchor(pr, thread);
-    let text: string | undefined;
-    let reason = 'Original diff excerpt (not a full file)';
-    if (anchor) {
-      try { text = await this.reviews.content(node.root, node.branch.pr!.url, anchor.sha, thread.path); }
-      catch { reason = 'Revision unavailable; showing original diff excerpt'; }
-    }
     let document: vscode.TextDocument | undefined;
-    let line = text !== undefined && anchor ? anchor.line - 1 : 0;
-    if (text !== undefined && checkout && !thread.isOutdated && anchor) {
+    let line = 0;
+    let reason = 'Workspace file · PR line; local edits may shift its position';
+    if (checkout) {
       try {
         const root = await realpath(node.root);
         const path = await realpath(resolve(root, thread.path));
         const child = relative(root, path);
         if (child && child !== '..' && !child.startsWith('..' + sep) && !isAbsolute(child)) {
-          const local = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
-          if (!local.isDirty && local.getText() === text) { document = local; }
+          document = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
+          const targetLine = thread.isOutdated ? thread.originalLine : thread.line;
+          line = targetLine && Number.isSafeInteger(targetLine) && targetLine > 0 ? targetLine - 1 : 0;
+          if (thread.isOutdated) { reason = 'Workspace file · Outdated comment; original line may have moved'; }
+          else if (thread.diffSide === 'LEFT') { reason = 'Workspace file · Old-side comment; line is approximate'; }
+          if (!targetLine) { reason += ' · No line reference; showing file from start'; }
         }
       } catch { /* Missing or renamed local files use the pinned snapshot. */ }
     }
     if (!document) {
+      const anchor = snapshotAnchor(pr, thread);
+      let text: string | undefined;
+      reason = 'Original diff excerpt (not a full file)';
+      if (anchor) {
+        try { text = await this.reviews.content(node.root, node.branch.pr!.url, anchor.sha, thread.path); }
+        catch { reason = 'Revision unavailable; showing original diff excerpt'; }
+      }
+      line = text !== undefined && anchor ? anchor.line - 1 : 0;
       const excerpt = text === undefined;
       const content = text ?? `# ${reason}\n# ${thread.path} · ${thread.diffSide} side\n\n${thread.comments[0]?.diffHunk || '(No code excerpt available for this thread.)'}`;
       const uri = vscode.Uri.from({ scheme: 'stacknav-review', path: `/${++this.serial}/${thread.path}${excerpt ? '.diff' : ''}` });
       this.documents.set(uri.toString(), content);
       document = await vscode.workspace.openTextDocument(uri);
-      reason = excerpt ? reason : 'Read-only PR revision; local code may differ';
-    } else { reason = 'Working file matches PR revision'; }
+      reason = `${checkout ? 'Workspace file unavailable' : 'Checkout not completed'} · ${excerpt ? reason : 'Read-only PR revision'}`;
+    }
     if (this.disposed) { return; }
-    if (line >= document.lineCount) { line = 0; reason = 'Line unavailable; showing revision from start'; }
+    if (line >= document.lineCount) { line = 0; reason += ' · Line unavailable; showing file from start'; }
     const range = new vscode.Range(line, 0, line, 0);
     this.thread?.dispose();
     this.thread = this.controller.createCommentThread(document.uri, range, thread.comments.map(comment => ({

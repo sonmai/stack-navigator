@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Reviews, ReviewPr } from '../src/reviews';
 
 test('overview expands without checkout, opens selected native thread, and disposes on branch change', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'stacknav-workspace-'));
+  const localRoot = join(temp, 'repo');
+  await mkdir(localRoot);
   const commands = new Map<string, (...args: any[]) => any>();
   const snapshots = new Map<string, string>();
   const threads: any[] = [];
@@ -18,6 +24,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
     constructor(readonly path: string) {}
     toString() { return this.scheme + ':' + this.path; }
     static from(value: { path: string }) { return new Uri(value.path); }
+    static file(path: string) { const uri = new Uri(path); uri.scheme = 'file'; return uri; }
   }
   const vscode = {
     EventEmitter: Emitter,
@@ -37,7 +44,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
       textDocuments: [], onDidCloseTextDocument: () => ({ dispose() {} }),
       registerTextDocumentContentProvider(_scheme: string, value: any) { provider = value; return { dispose() {} }; },
       async openTextDocument(uri: Uri) {
-        const content = provider.provideTextDocumentContent(uri);
+        const content = uri.scheme === 'file' ? await readFile(uri.path, 'utf8') : provider.provideTextDocumentContent(uri);
         snapshots.set(uri.toString(), content);
         return { uri, lineCount: content.split('\n').length, getText: () => content };
       }
@@ -54,7 +61,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
   const { ReviewOverview } = require('../src/reviewOverview');
   Module._load = originalLoad;
   const originals = { read: Reviews.prototype.read, readThread: Reviews.prototype.readThread, checkout: Reviews.prototype.checkout, content: Reviews.prototype.content };
-  let checkouts = 0, reads = 0, navigationRoot = '';
+  let checkouts = 0, reads = 0, contentReads = 0, navigationRoot = '';
   const pr: ReviewPr = { title: 'API', state: 'OPEN', isDraft: false, reviewDecision: 'CHANGES_REQUESTED', headRefOid: 'a'.repeat(40), threads: [{
     id: 'T', path: 'a.ts', line: 2, originalLine: 2, diffSide: 'RIGHT', isOutdated: true, isResolved: false,
     comments: [{ body: 'Fix this', author: { login: 'alice' }, url: '', diffHunk: '', originalCommit: { oid: 'b'.repeat(40) } }]
@@ -62,7 +69,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
   Reviews.prototype.read = async () => { reads++; return pr; };
   Reviews.prototype.readThread = async () => pr;
   Reviews.prototype.checkout = async () => { checkouts++; };
-  Reviews.prototype.content = async () => 'first\nsecond\n';
+  Reviews.prototype.content = async () => { contentReads++; return 'first\nsecond\n'; };
   const overview = new ReviewOverview(async (root: string, action: () => Promise<void>) => { navigationRoot = root; await action(); }, undefined, workspaceState);
   const state: any = { type: 'loaded', index: 0, stack: { trunk: 'main', currentBranch: 'api', branches: [
     { name: 'api', isCurrent: true, pr: { number: 1, url: 'https://github.com/o/r/pull/1', state: 'OPEN' } },
@@ -106,7 +113,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
     assert.equal(threads[0].collapsibleState, 1);
     assert.equal(threads[0].range.startLine, 1);
     assert.equal(threads[0].comments[0].body.value, 'Fix this');
-    assert.equal(opened[0].doc.uri.scheme, 'stacknav-review', 'outdated threads use immutable snapshot');
+    assert.equal(opened[0].doc.uri.scheme, 'stacknav-review', 'missing workspace file uses immutable snapshot');
     state.stack.branches[0].isCurrent = false; state.stack.branches[1].isCurrent = true;
     overview.update('/correct-repo', state);
     assert.equal(threads[0].disposed, true);
@@ -119,6 +126,43 @@ test('overview expands without checkout, opens selected native thread, and dispo
     await overview.getChildren((await overview.getChildren())[1]);
     await commands.get('stacknav.openReviewThread')!(target);
     assert.equal(opened.length, 2, 'blocked checkout can still open read-only');
+    await writeFile(join(localRoot, 'a.ts'), 'local edits\nlocal second line\n');
+    Reviews.prototype.checkout = async () => { checkouts++; };
+    overview.update(localRoot, state);
+    const localChildren = await overview.getChildren((await overview.getChildren())[1]);
+    const localTarget = overview.getTreeItem(localChildren[0]).command.arguments[0];
+    const openLocal = () => commands.get('stacknav.openReviewThread')!(localTarget);
+    const beforeContent = contentReads;
+    await openLocal();
+    assert.equal(opened.at(-1).doc.uri.scheme, 'file', 'outdated comments open the workspace file');
+    assert.equal(opened.at(-1).doc.uri.path, join(localRoot, 'a.ts'), 'uses the selected PR repository');
+    assert.match(threads.at(-1).label, /Outdated comment/);
+    assert.equal(threads.at(-1).range.startLine, 1);
+    pr.threads[0].isOutdated = false;
+    await openLocal();
+    assert.equal(opened.at(-1).doc.getText(), 'local edits\nlocal second line\n', 'different local content is preserved');
+    pr.threads[0].diffSide = 'LEFT';
+    await openLocal();
+    assert.match(threads.at(-1).label, /Old-side comment; line is approximate/);
+    assert.equal(opened.at(-1).doc.uri.scheme, 'file');
+    pr.threads[0].line = 999;
+    await openLocal();
+    assert.equal(threads.at(-1).range.startLine, 0);
+    assert.match(threads.at(-1).label, /Line unavailable/);
+    pr.threads[0].line = null;
+    await openLocal();
+    assert.equal(threads.at(-1).range.startLine, 0);
+    assert.match(threads.at(-1).label, /No line reference/);
+    assert.equal(contentReads, beforeContent, 'local navigation never fetches the GitHub file');
+    pr.threads[0].line = 2; pr.threads[0].diffSide = 'RIGHT';
+    await rm(join(localRoot, 'a.ts'));
+    await openLocal();
+    assert.equal(opened.at(-1).doc.uri.scheme, 'stacknav-review', 'deleted file falls back to revision');
+    assert.match(threads.at(-1).label, /Workspace file unavailable/);
+    await writeFile(join(temp, 'outside.ts'), 'outside repo');
+    await symlink(join(temp, 'outside.ts'), join(localRoot, 'a.ts'));
+    await openLocal();
+    assert.equal(opened.at(-1).doc.uri.scheme, 'stacknav-review', 'symlink escape cannot open another repo file');
     const reloaded = new ReviewOverview(async () => {}, undefined, workspaceState);
     reloaded.update('/correct-repo', state);
     assert.equal(revealed.length, 1, 'workspace state prevents auto-open after reload');
@@ -160,5 +204,6 @@ test('overview expands without checkout, opens selected native thread, and dispo
     requests.slice(6).forEach(request => request.finish(pr)); await flush();
   } finally {
     overview.dispose(); Object.assign(Reviews.prototype, originals);
+    await rm(temp, { recursive: true, force: true });
   }
 });
