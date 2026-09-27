@@ -7,6 +7,10 @@ test('overview expands without checkout, opens selected native thread, and dispo
   const snapshots = new Map<string, string>();
   const threads: any[] = [];
   const opened: any[] = [];
+  const revealed: any[] = [];
+  const persisted = new Map<string, unknown>();
+  const workspaceState = { get: (key: string, fallback: unknown) => persisted.get(key) ?? fallback,
+    update: async (key: string, value: unknown) => { persisted.set(key, value); } };
   let provider: any;
   class Emitter { event = () => ({ dispose() {} }); fire() {} dispose() {} }
   class Uri {
@@ -39,7 +43,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
       }
     },
     window: {
-      createTreeView: () => ({ dispose() {} }),
+      createTreeView: () => ({ reveal: async (node: any, options: any) => { revealed.push({ node, options }); }, dispose() {} }),
       showTextDocument: async (doc: any, options: any) => { opened.push({ doc, options }); return { revealRange() {} }; },
       showErrorMessage: (error: string) => { throw new Error(error); },
       showWarningMessage: async () => 'View read-only'
@@ -58,14 +62,22 @@ test('overview expands without checkout, opens selected native thread, and dispo
   Reviews.prototype.read = async () => { reads++; return pr; };
   Reviews.prototype.checkout = async () => { checkouts++; };
   Reviews.prototype.content = async () => 'first\nsecond\n';
-  const overview = new ReviewOverview(async (root: string, action: () => Promise<void>) => { navigationRoot = root; await action(); });
+  const overview = new ReviewOverview(async (root: string, action: () => Promise<void>) => { navigationRoot = root; await action(); }, undefined, workspaceState);
   const state: any = { type: 'loaded', index: 0, stack: { trunk: 'main', currentBranch: 'api', branches: [
     { name: 'api', isCurrent: true, pr: { number: 1, url: 'https://github.com/o/r/pull/1', state: 'OPEN' } },
     { name: 'ui', isCurrent: false, pr: { number: 2, url: 'https://github.com/o/r/pull/2', state: 'OPEN' } }
   ] } };
   try {
+    overview.update(undefined, { type: 'empty' });
+    assert.equal(revealed.length, 0, 'no auto-open before a stack is detected');
     overview.update('/correct-repo', state);
     const roots = await overview.getChildren();
+    assert.equal(revealed.length, 1);
+    assert.deepEqual(revealed[0].options, { focus: false, select: false, expand: false });
+    assert.equal(overview.getParent(roots[0]), undefined);
+    assert.equal(persisted.get('stacknav.overviewShown'), true);
+    overview.update('/correct-repo', state);
+    assert.equal(revealed.length, 1, 'refresh does not reopen the view');
     assert.equal(roots.length, 2);
     const children = await overview.getChildren(roots[1]);
     assert.equal(checkouts, 0);
@@ -82,9 +94,14 @@ test('overview expands without checkout, opens selected native thread, and dispo
     overview.update('/correct-repo', state);
     assert.equal(threads[0].disposed, true);
     assert.equal((await overview.getChildren())[1], roots[1], 'checkout keeps tree identity');
+    assert.equal(revealed.length, 1, 'checkout does not reopen the view');
     Reviews.prototype.checkout = async () => { throw new Error('Local changes'); };
     await commands.get('stacknav.openReviewThread')!(children[0]);
     assert.equal(opened.length, 2, 'blocked checkout can still open read-only');
+    const reloaded = new ReviewOverview(async () => {}, undefined, workspaceState);
+    reloaded.update('/correct-repo', state);
+    assert.equal(revealed.length, 1, 'workspace state prevents auto-open after reload');
+    reloaded.dispose();
   } finally {
     overview.dispose(); Object.assign(Reviews.prototype, originals);
   }

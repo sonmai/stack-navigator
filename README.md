@@ -67,7 +67,9 @@ If several local stacks share the same trunk, choose **Select stack…** to pick
 
 ## Stack review overview (prototype)
 
-The **Stack Navigator** view in Explorer lists PRs in the current local stack.
+Click the **Stack Navigator** icon in the Activity Bar to see PRs in the current local stack.
+The view opens automatically the first time a stack with PRs is detected in a workspace, without taking editor focus.
+After that, it does not reopen automatically on refresh, checkout or window reload.
 Expand a PR to load its review decision, CI summary and review threads, including resolved threads.
 Expanding does not change branches. Click a thread to check out its local branch and open its code with a read-only native comment thread.
 

@@ -26,8 +26,10 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
   private opening = false;
   private disposed = false;
   private serial = 0;
+  private autoOpenAttempted = false;
 
-  constructor(private readonly navigate: Navigate, private readonly titleFor: (url: string) => string | undefined = () => undefined) {
+  constructor(private readonly navigate: Navigate, private readonly titleFor: (url: string) => string | undefined = () => undefined,
+    private readonly workspaceState?: vscode.Memento) {
     this.view = vscode.window.createTreeView('stacknav.overview', { treeDataProvider: this });
     this.disposables.push(this.view, this.controller, this.changed,
       vscode.workspace.registerTextDocumentContentProvider('stacknav-review', {
@@ -60,12 +62,28 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
       ? 'Preview: expand a PR to load reviews. Click a thread to check out its branch and open code.'
       : 'Open a local stack to see its PRs. For multiple stacks on trunk, select a stack first.';
     this.changed.fire(undefined);
+    void this.openInitially();
+  }
+
+  private async openInitially(): Promise<void> {
+    if (this.disposed || !this.nodes.length || this.autoOpenAttempted ||
+      this.workspaceState?.get<boolean>('stacknav.overviewShown', false)) { return; }
+    this.autoOpenAttempted = true;
+    try {
+      // Revealing a root makes the container visible without expanding/loading its reviews or taking editor focus.
+      await this.view.reveal(this.nodes[0], { focus: false, select: false, expand: false });
+      await this.workspaceState?.update('stacknav.overviewShown', true);
+    } catch { /* A disposed/hidden view must not break stack navigation; retry on the next activation. */ }
   }
 
   private refresh(): void {
     this.reads.abort(); this.reads = new AbortController(); this.pending.clear();
     this.nodes.forEach(node => { node.data = undefined; node.error = undefined; });
     this.changed.fire(undefined);
+  }
+
+  getParent(node: Node): Node | undefined {
+    return node.kind === 'thread' ? node.pr : undefined;
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
