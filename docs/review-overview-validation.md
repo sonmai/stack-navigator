@@ -30,9 +30,13 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
   then retry with the sidebar Refresh button. Confirm the stack and threads return.
 - Refresh or switch away and back before clicking a previously rendered comment.
   Confirm it opens the same PR/thread, or explicitly reports that the item is no longer available.
-- Change the local file or add unpushed commits. Confirm mismatched content opens read-only.
-- Try a LEFT-side thread and an outdated thread. Verify the label distinguishes a full
-  historical snapshot from a diff excerpt. No guessed line may be used in the working file.
+- Change the local file or add unpushed commits. Confirm the actual workspace file opens
+  for editing and its contents are preserved, without fetching file contents from GitHub.
+- Try a LEFT-side thread and an outdated thread. Confirm the workspace file opens with
+  a label indicating an approximate or possibly moved line.
+- Try a comment without a line, or a line beyond the local file length. Confirm the file
+  opens at the start and the label explains why.
+- Delete the local file. Confirm a labelled read-only PR revision or diff excerpt opens.
 - Leave an editor unsaved, then click a thread. Confirm checkout is blocked and read-only
   viewing remains available without discarding changes.
 - Make changes that prevent Git switching branches. Confirm no stash/reset/force occurs.
@@ -44,8 +48,10 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 
 ## Prototype limitations
 
-- LEFT-side comments use diff excerpts rather than reconstructed historical base files.
-- File-level comments without line coordinates also use the excerpt fallback.
+- Local line positions are not remapped across edits. Outdated and LEFT-side comments
+  use approximate coordinates with a warning; file-level comments open at the start.
+- If the workspace file is unavailable, LEFT-side and file-level comments use diff excerpts
+  rather than reconstructed historical base files.
 - Review metadata and first-comment previews load for the whole stack with two concurrent PR loads.
   Full replies load only for the selected thread. Large stacks/threads can take multiple requests.
 - No reply/resolve/approve actions, conversation comments, auto-refresh or worktree creation.

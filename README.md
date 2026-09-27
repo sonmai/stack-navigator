@@ -76,8 +76,9 @@ The current PR loads first; expanding another PR prioritizes it in the queue. Ea
 Expanding does not change branches. Click a thread to check out its local branch and open its code with a read-only native comment thread.
 The **Current** label marks the checked-out branch. A checkmark means the PR's review decision is **APPROVED**; merged and closed PRs have their own icons.
 
-- Matching local files open for editing; outdated comments or differing local content open a read-only PR revision.
-- Comments on the old side of a diff show the original diff excerpt, not a guessed location in the working file. Missing historical revisions use the same fallback.
+- After checkout, comments open the actual file in the PR's workspace repository, including files with local edits. File contents are not fetched from GitHub for comparison.
+- Outdated comments and comments on the old side of a diff still open the workspace file, with a label warning that the line may have moved or is approximate. Missing line references open the file from the start.
+- If the workspace file is unavailable, the view falls back to a read-only PR revision or original diff excerpt, clearly labelled as a fallback.
 - Checkout never stashes, resets, rebases or forces changes. If blocked, choose **View read-only** to inspect the comment without completing checkout.
 - Unsaved file editors must be saved or closed before checkout. The prototype checks all open file editors conservatively.
 - Full replies are fetched only for the thread you click, along with fresh code coordinates.
