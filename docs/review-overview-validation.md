@@ -17,6 +17,9 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 - Close the view, refresh, switch branches and reload the window. Confirm it does not reopen automatically.
 - Click the Activity Bar icon to reopen the view. Confirm PR numbers, titles and current-branch marker.
 - Expand both PRs without checking them out. Confirm decision, CI and unresolved counts.
+- Wait for background loading, then expand other PRs: comments should appear without a new request.
+- During initial loading, expand a queued PR and confirm it is loaded before other queued PRs.
+- Refresh and confirm existing threads remain visible with an Updating label until replaced.
 - Click an unresolved RIGHT-side thread on another PR. Confirm only the owning repo changes
   branch, the correct file opens and the selected thread is expanded at the correct line.
 - Repeat in a second repository, including matching filenames across repositories.
@@ -37,8 +40,8 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 
 - LEFT-side comments use diff excerpts rather than reconstructed historical base files.
 - File-level comments without line coordinates also use the excerpt fallback.
-- Review metadata and all replies are loaded when each PR is expanded, not as a background
-  stack-wide aggregation. Large threads can take multiple requests.
+- Review metadata and first-comment previews load for the whole stack with two concurrent PR loads.
+  Full replies load only for the selected thread. Large stacks/threads can take multiple requests.
 - No reply/resolve/approve actions, conversation comments, auto-refresh or worktree creation.
 - No private commands from GitHub Pull Requests or proposed VS Code APIs are used.
 - Snapshots are held in memory until their editors close. Content retrieval uses the existing

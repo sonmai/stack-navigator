@@ -53,13 +53,14 @@ test('overview expands without checkout, opens selected native thread, and dispo
   Module._load = function(id: string, ...args: any[]) { return id === 'vscode' ? vscode : originalLoad.call(this, id, ...args); };
   const { ReviewOverview } = require('../src/reviewOverview');
   Module._load = originalLoad;
-  const originals = { read: Reviews.prototype.read, checkout: Reviews.prototype.checkout, content: Reviews.prototype.content };
+  const originals = { read: Reviews.prototype.read, readThread: Reviews.prototype.readThread, checkout: Reviews.prototype.checkout, content: Reviews.prototype.content };
   let checkouts = 0, reads = 0, navigationRoot = '';
   const pr: ReviewPr = { title: 'API', state: 'OPEN', isDraft: false, reviewDecision: 'CHANGES_REQUESTED', headRefOid: 'a'.repeat(40), threads: [{
     id: 'T', path: 'a.ts', line: 2, originalLine: 2, diffSide: 'RIGHT', isOutdated: true, isResolved: false,
     comments: [{ body: 'Fix this', author: { login: 'alice' }, url: '', diffHunk: '', originalCommit: { oid: 'b'.repeat(40) } }]
   }] };
   Reviews.prototype.read = async () => { reads++; return pr; };
+  Reviews.prototype.readThread = async () => pr;
   Reviews.prototype.checkout = async () => { checkouts++; };
   Reviews.prototype.content = async () => 'first\nsecond\n';
   const overview = new ReviewOverview(async (root: string, action: () => Promise<void>) => { navigationRoot = root; await action(); }, undefined, workspaceState);
@@ -81,7 +82,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
     assert.equal(roots.length, 2);
     const children = await overview.getChildren(roots[1]);
     assert.equal(checkouts, 0);
-    await overview.getChildren(roots[1]); assert.equal(reads, 1, 'cached when expanded again');
+    await overview.getChildren(roots[1]); assert.equal(reads, 2, 'both PRs prefetched and cached when expanded again');
     await commands.get('stacknav.openReviewThread')!(children[0]);
     assert.equal(checkouts, 1);
     assert.equal(navigationRoot, '/correct-repo');
@@ -102,6 +103,40 @@ test('overview expands without checkout, opens selected native thread, and dispo
     reloaded.update('/correct-repo', state);
     assert.equal(revealed.length, 1, 'workspace state prevents auto-open after reload');
     reloaded.dispose();
+    // Exercise the real queue with controlled network completion.
+    const requests: { url: string; finish: (value: ReviewPr) => void; signal?: AbortSignal }[] = [];
+    Reviews.prototype.read = async (_root, url, signal, summary) => {
+      assert.equal(summary, true, 'background loads only thread summaries');
+      return new Promise(resolve => { requests.push({ url, finish: resolve, signal }); });
+    };
+    const queued = new ReviewOverview(async () => {}, undefined, workspaceState);
+    const many = { ...state, stack: { ...state.stack, branches: [1, 2, 3, 4].map(number => ({
+      name: `b${number}`, isCurrent: number === 3,
+      pr: { number, url: `https://github.com/o/r/pull/${number}`, state: 'OPEN' }
+    })) } };
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    queued.update('/repo', many);
+    const prs = await queued.getChildren();
+    assert.deepEqual(requests.map(r => r.url.slice(-1)), ['3', '1'], 'current PR first, at most two concurrent');
+    const expanding = queued.getChildren(prs[3]);
+    requests[0].finish(pr); await flush();
+    assert.equal(requests[2].url.slice(-1), '4', 'expanded PR jumps ahead of queued background work');
+    requests[1].finish(pr); requests[2].finish(pr); await flush();
+    assert.equal(requests[3].url.slice(-1), '2');
+    requests[3].finish(pr); await expanding; await flush();
+    queued.update('/repo', many);
+    assert.equal(requests.length, 4, 'same stack retains cache');
+    await commands.get('stacknav.refreshOverview')!();
+    assert.equal((await queued.getChildren(prs[0])).length, 1, 'old threads remain visible while refreshing');
+    assert.match(queued.getTreeItem(prs[0]).description, /Updating/);
+    queued.update('/other', many);
+    assert.ok(requests[4].signal?.aborted);
+    assert.ok(requests[5].signal?.aborted);
+    requests[4].finish({ ...pr, title: 'stale' }); requests[5].finish(pr); await flush();
+    const other = await queued.getChildren();
+    assert.equal(other[0].data, undefined, 'late old-repo response cannot populate new stack');
+    queued.dispose();
+    requests.slice(6).forEach(request => request.finish(pr)); await flush();
   } finally {
     overview.dispose(); Object.assign(Reviews.prototype, originals);
   }
