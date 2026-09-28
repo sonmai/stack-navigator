@@ -21,3 +21,4 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm test
+      - run: npm run package:vsix -- --out stack-navigator-ci.vsix

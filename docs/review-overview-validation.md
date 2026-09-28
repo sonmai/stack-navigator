@@ -14,6 +14,7 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 
 - Confirm the Stack Navigator icon is visible in the Activity Bar.
 - In a fresh workspace, confirm detecting a stack opens the view once without taking editor focus.
+- If the first reveal fails, confirm a later stack refresh retries without repeatedly reopening after success.
 - Close the view, refresh, switch branches and reload the window. Confirm it does not reopen automatically.
 - Click the Activity Bar icon to reopen the view. Confirm PR numbers, titles and current-branch marker.
 - Expand both PRs without checking them out. Confirm decision, CI and unresolved counts.
@@ -39,6 +40,11 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 - Delete the local file. Confirm a labelled read-only PR revision or diff excerpt opens.
 - Leave an editor unsaved, then click a thread. Confirm checkout is blocked and read-only
   viewing remains available without discarding changes.
+- Repeat with a dirty notebook, including unsaved notebook metadata/output changes.
+- Confirm dirty files/notebooks in another repository and untitled buffers do not block checkout.
+- Confirm new files and symlink aliases into the selected repository still block checkout while dirty.
+- Confirm unsupported thread paths do not hide other threads; the PR row reports the hidden count
+  and explicitly indicates that unresolved counts exclude those threads.
 - Make changes that prevent Git switching branches. Confirm no stash/reset/force occurs.
 - Click threads rapidly. Confirm checkout operations do not overlap.
 - Switch branches outside the overview. Confirm the previously displayed native thread disappears.
@@ -54,6 +60,8 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
   rather than reconstructed historical base files.
 - Review metadata and first-comment previews load for the whole stack with two concurrent PR loads.
   Full replies load only for the selected thread. Large stacks/threads can take multiple requests.
+- Pagination is limited to 100 pages per connection and 200 requests per PR load. Cyclic cursors,
+  malformed responses and exceeded limits produce errors rather than successful partial results.
 - No reply/resolve/approve actions, conversation comments, auto-refresh or worktree creation.
 - No private commands from GitHub Pull Requests or proposed VS Code APIs are used.
 - Snapshots are held in memory until their editors close. Content retrieval uses the existing

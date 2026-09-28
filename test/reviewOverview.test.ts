@@ -41,7 +41,7 @@ test('overview expands without checkout, opens selected native thread, and dispo
     }) },
     commands: { registerCommand(name: string, action: any) { commands.set(name, action); return { dispose() {} }; } },
     workspace: {
-      textDocuments: [], onDidCloseTextDocument: () => ({ dispose() {} }),
+      textDocuments: [], notebookDocuments: [], onDidCloseTextDocument: () => ({ dispose() {} }),
       registerTextDocumentContentProvider(_scheme: string, value: any) { provider = value; return { dispose() {} }; },
       async openTextDocument(uri: Uri) {
         const content = uri.scheme === 'file' ? await readFile(uri.path, 'utf8') : provider.provideTextDocumentContent(uri);
@@ -93,6 +93,8 @@ test('overview expands without checkout, opens selected native thread, and dispo
     assert.equal(checkouts, 0);
     await overview.getChildren(roots[1]); assert.equal(reads, 2, 'both PRs prefetched and cached when expanded again');
     const currentItem = overview.getTreeItem(roots[1]);
+    roots[1].data = { ...pr, omittedThreads: 2 };
+    assert.match(overview.getTreeItem(roots[1]).description, /2 threads hidden.*counts exclude them/);
     assert.equal(currentItem.iconPath.id, 'git-pull-request', 'checkout does not imply approval');
     assert.match(currentItem.description, /^Current ·/);
     roots[0].data = { ...pr, reviewDecision: 'APPROVED' };
@@ -150,6 +152,9 @@ test('overview expands without checkout, opens selected native thread, and dispo
     assert.equal(threads.at(-1).range.startLine, 0);
     assert.match(threads.at(-1).label, /Line unavailable/);
     pr.threads[0].line = null;
+    await openLocal();
+    assert.equal(threads.at(-1).range.startLine, 1, 'LEFT uses originalLine when line is null');
+    pr.threads[0].originalLine = null;
     await openLocal();
     assert.equal(threads.at(-1).range.startLine, 0);
     assert.match(threads.at(-1).label, /No line reference/);
