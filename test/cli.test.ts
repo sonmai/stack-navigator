@@ -3,7 +3,22 @@ import test from 'node:test';
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { RepositoryMismatchError, StackCli } from '../src/cli';
+import { RepositoryMismatchError, StackCli, runGh, runGit } from '../src/cli';
+
+test('switch and stack checkout use long timeouts while reads retain 30 seconds', async () => {
+  const cp = require('node:child_process'), original = cp.execFile;
+  const timeouts: number[] = [];
+  cp.execFile = (_cmd: string, _args: string[], options: any, callback: any) => {
+    timeouts.push(options.timeout); callback(null, '', ''); return { stdin: { end() {} } };
+  };
+  try {
+    await runGit(['switch', '--no-guess', '--', 'feature'], '/repo');
+    await runGh(['stack', 'checkout', 'https://github.com/o/r/pull/1'], '/repo');
+    await runGit(['symbolic-ref', '--short', 'HEAD'], '/repo');
+    await runGh(['stack', 'view', '--json'], '/repo');
+    assert.deepEqual(timeouts, [120_000, 120_000, 30_000, 30_000]);
+  } finally { cp.execFile = original; }
+});
 
 test('every command stays within the reviewer navigation allowlist', async () => {
   const calls: string[][] = [];

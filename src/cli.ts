@@ -70,20 +70,20 @@ export class StackCli {
 }
 
 export function runGit(args: readonly string[], cwd: string, signal?: AbortSignal): Promise<string> {
-  return runCommand(process.platform === 'win32' ? 'git.exe' : 'git', args, cwd, signal);
+  return runCommand(process.platform === 'win32' ? 'git.exe' : 'git', args, cwd, signal, args[0] === 'switch' ? 120_000 : 30_000);
 }
 
 export function runGh(args: readonly string[], cwd: string, signal?: AbortSignal): Promise<string> {
-  return runCommand(executable, args, cwd, signal);
+  return runCommand(executable, args, cwd, signal, args[0] === 'stack' && args[1] === 'checkout' ? 120_000 : 30_000);
 }
 
-function runCommand(command: string, args: readonly string[], cwd: string, signal?: AbortSignal): Promise<string> {
+function runCommand(command: string, args: readonly string[], cwd: string, signal: AbortSignal | undefined, timeout: number): Promise<string> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     const child = execFile(command, [...args], {
       cwd,
       signal,
-      timeout: args[1] === 'checkout' ? 120_000 : 30_000,
+      timeout,
       maxBuffer: 2 * 1024 * 1024,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       windowsHide: true

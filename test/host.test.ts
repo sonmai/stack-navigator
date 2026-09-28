@@ -42,6 +42,7 @@ test('host retains busy HEAD changes, replaces listeners, cancels stale reads an
   Module._load = originalLoad;
   const subscriptions: { dispose(): void }[] = [];
   const originalView = StackCli.prototype.view, originalDetails = StackCli.prototype.prDetails, originalFirst = StackCli.prototype.firstLayer;
+  const originalCurrentPr = StackCli.prototype.currentPr;
   const calls: string[] = [], signals: AbortSignal[] = [];
   let holdRead = false;
   let allMerged = false;
@@ -156,10 +157,19 @@ test('host retains busy HEAD changes, replaces listeners, cancels stale reads an
     editorChanged.fire();
     await commands.get('stacknav.refresh')!();
     assert.equal(calls.at(-1), '/a', 'sidebar/terminal focus retains the last repository');
+    StackCli.prototype.view = async () => { throw new CliError('not in stack', 2); };
+    StackCli.prototype.currentPr = async () => JSON.stringify({ number: 7, url: 'https://github.com/o/r/pull/7' });
+    await commands.get('stacknav.refresh')!();
+    assert.equal(bars[1].text, '$(layers) Load stack for #7');
+    assert.equal(bars[1].command, 'stacknav.load');
+    StackCli.prototype.currentPr = async () => { throw new CliError('no PR', 1); };
+    await commands.get('stacknav.refresh')!();
+    assert.equal(bars[1].visible, false, 'no stack and no PR hides the status bar');
   } finally {
     for (const subscription of subscriptions) { subscription.dispose(); }
     LocalStacks.prototype.list = originalList; LocalStacks.prototype.enter = originalEnter;
     StackCli.prototype.view = originalView; StackCli.prototype.prDetails = originalDetails; StackCli.prototype.firstLayer = originalFirst;
+    StackCli.prototype.currentPr = originalCurrentPr;
   }
   assert.equal(changedA.size, 0); assert.equal(changedB.size, 0);
 });

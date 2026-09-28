@@ -38,7 +38,7 @@ test('comment click runs through the host, keeps the stack, and opens its native
       const thread = { ...disposable(), args }; threads.push(thread); return thread;
     } }) },
     workspace: {
-      isTrusted: true, textDocuments: [], onDidCloseTextDocument: disposable,
+      isTrusted: true, textDocuments: [], notebookDocuments: [], onDidCloseTextDocument: disposable,
       registerTextDocumentContentProvider: (_scheme: string, p: any) => { contentProvider = p; return disposable(); },
       openTextDocument: async (uri: Uri) => ({ uri, lineCount: 3, getText: () => contentProvider.provideTextDocumentContent(uri) })
     },

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Reviews, ReviewPr, ReviewThread, prIdentity, safeReviewPath, snapshotAnchor } from '../src/reviews';
+import { Reviews, ReviewPr, ReviewThread, prIdentity, safeReviewPath, snapshotAnchor, workspaceReviewLine } from '../src/reviews';
 
 const oid = 'a'.repeat(40), original = 'b'.repeat(40);
 const comment = { body: 'Fix this', author: { login: 'reviewer' }, url: 'https://github.com/o/r/pull/1#discussion_r1', diffHunk: '@@ -1 +1 @@\n-old\n+new', originalCommit: { oid: original } };
@@ -8,6 +8,68 @@ const thread: ReviewThread = { id: 'T1', path: 'src/a.ts', line: 2, originalLine
 const pr: ReviewPr = { title: 'Title', state: 'OPEN', isDraft: false, reviewDecision: null, headRefOid: oid, threads: [thread] };
 const page = (nodes: unknown[], more = false, cursor: string | null = null) => ({ nodes, pageInfo: { hasNextPage: more, endCursor: cursor } });
 const payload = (threads: unknown[], more = false) => JSON.stringify({ data: { repository: { pullRequest: { ...pr, reviewThreads: page(threads, more, more ? 'next' : null) } } } });
+
+test('LEFT-side local navigation falls back to originalLine without inventing a RIGHT-side coordinate', () => {
+  assert.equal(workspaceReviewLine({ ...thread, diffSide: 'LEFT', line: null }), 1);
+  assert.equal(workspaceReviewLine({ ...thread, diffSide: 'LEFT' }), 2);
+  assert.equal(workspaceReviewLine({ ...thread, line: null }), null);
+  assert.equal(workspaceReviewLine({ ...thread, isOutdated: true }), 1);
+});
+
+test('nullable connection nodes are skipped and raw GraphQL fields do not leak into models', async () => {
+  const service = new Reviews(async () => payload([null, { ...thread, extra: 'ignored', comments: page([null, comment]) }]));
+  const result = await service.read('/repo', 'https://github.com/o/r/pull/1');
+  assert.equal(result.threads.length, 1);
+  assert.equal(result.threads[0].comments.length, 1);
+  assert.equal('extra' in result.threads[0], false);
+});
+
+test('malformed comments fail explicitly before reaching the tree', async () => {
+  const service = new Reviews(async () => payload([{ ...thread, comments: page([{ body: 42 }]) }]));
+  await assert.rejects(service.read('/repo', 'https://github.com/o/r/pull/1'), /Invalid review comment/);
+});
+
+for (const selected of [false, true]) {
+  for (const mode of ['cycle', 'limit', 'failure', 'missing cursor'] as const) {
+    test(`${selected ? 'selected thread' : 'thread list'} rejects pagination ${mode}`, async () => {
+      let calls = 0;
+      const service = new Reviews(async () => {
+        calls++;
+        if (mode === 'failure' && calls === 2) { throw new Error('page failed'); }
+        const cursor = mode === 'missing cursor' ? null : mode === 'cycle' ? (calls % 2 ? 'A' : 'B') : `p${calls}`;
+        return JSON.stringify({ data: selected
+          ? { node: { ...thread, pullRequest: { ...pr, url: 'https://github.com/o/r/pull/1' }, comments: page([comment], true, cursor) } }
+          : { repository: { pullRequest: { ...pr, reviewThreads: page([], true, cursor) } } } });
+      });
+      await assert.rejects(selected ? service.readThread('/repo', 'https://github.com/o/r/pull/1', 'T1')
+        : service.read('/repo', 'https://github.com/o/r/pull/1'), mode === 'failure' ? /page failed/ : mode === 'limit' ? /limit exceeded/ : /pagination cursor/);
+      assert.equal(calls, mode === 'cycle' ? 3 : mode === 'limit' ? 100 : mode === 'failure' ? 2 : 1);
+    });
+  }
+}
+
+test('nested reply pagination also rejects cursor cycles', async () => {
+  let calls = 0;
+  const service = new Reviews(async () => {
+    calls++;
+    return calls === 1 ? payload([{ ...thread, comments: page([comment], true, 'A') }])
+      : JSON.stringify({ data: { node: { comments: page([comment], true, calls === 2 ? 'B' : 'A') } } });
+  });
+  await assert.rejects(service.read('/repo', 'https://github.com/o/r/pull/1'), /pagination cursor/);
+  assert.equal(calls, 3);
+});
+
+test('total request budget bounds nested replies across multiple threads', async () => {
+  let calls = 0;
+  const service = new Reviews(async args => {
+    calls++;
+    if (calls === 1) { return payload([1, 2, 3].map(id => ({ ...thread, id: `T${id}`, comments: page([comment], true, '1') }))); }
+    const cursor = Number(args.find(arg => arg.startsWith('cursor='))!.slice(7));
+    return JSON.stringify({ data: { node: { comments: page([comment], cursor < 99, String(cursor + 1)) } } });
+  });
+  await assert.rejects(service.read('/repo', 'https://github.com/o/r/pull/1'), /request limit exceeded/);
+  assert.equal(calls, 200);
+});
 
 test('review anchors never map LEFT or outdated comments to current code', () => {
   assert.deepEqual(snapshotAnchor(pr, thread), { sha: oid, line: 2 });

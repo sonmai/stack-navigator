@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { realpath } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { NavState, StackBranch } from './core';
-import { ReviewPr, Reviews, ReviewThread, safeReviewPath, snapshotAnchor } from './reviews';
+import { ReviewPr, Reviews, ReviewThread, safeReviewPath, snapshotAnchor, workspaceReviewLine } from './reviews';
 
 interface PrNode { kind: 'pr'; root: string; branch: StackBranch; data?: ReviewPr; error?: string; loading?: boolean }
 interface ThreadNode { kind: 'thread'; pr: PrNode; thread: ReviewThread }
@@ -13,7 +13,6 @@ type Navigate = (root: string, action: () => Promise<void>) => Promise<void>;
 export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<Node | undefined>();
   readonly onDidChangeTreeData = this.changed.event;
-  private readonly reviews = new Reviews();
   private readonly controller = vscode.comments.createCommentController('stacknav.review', 'Stack Navigator Preview');
   private readonly documents = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
@@ -32,7 +31,8 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
   private autoOpenAttempted = false;
 
   constructor(private readonly navigate: Navigate, private readonly titleFor: (url: string) => string | undefined = () => undefined,
-    private readonly workspaceState?: vscode.Memento, refreshStack?: () => Promise<void>) {
+    private readonly workspaceState?: vscode.Memento, refreshStack?: () => Promise<void>,
+    private readonly reviews: Pick<Reviews, 'read' | 'readThread' | 'checkout' | 'content'> = new Reviews()) {
     this.view = vscode.window.createTreeView('stacknav.overview', { treeDataProvider: this });
     this.disposables.push(this.view, this.controller, this.changed,
       vscode.workspace.registerTextDocumentContentProvider('stacknav-review', {
@@ -62,6 +62,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
       this.queue.sort((a, b) => Number(b.branch.isCurrent) - Number(a.branch.isCurrent));
       this.changed.fire(undefined);
       this.updateMessage(state);
+      void this.openInitially();
       return;
     }
     this.key = key;
@@ -91,7 +92,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
       // Revealing a root makes the container visible without expanding/loading its reviews or taking editor focus.
       await this.view.reveal(this.nodes[0], { focus: false, select: false, expand: false });
       await this.workspaceState?.update('stacknav.overviewShown', true);
-    } catch { /* A disposed/hidden view must not break stack navigation; retry on the next activation. */ }
+    } catch { this.autoOpenAttempted = false; /* Retry on a later update, never in a tight loop. */ }
   }
 
   private refresh(): void {
@@ -215,7 +216,8 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
         let checkout = false;
         try {
           // Unsaved editors are not represented in Git's checkout safety checks.
-          if (vscode.workspace.textDocuments.some(doc => doc.isDirty && doc.uri.scheme === 'file')) {
+          if (vscode.workspace.textDocuments.some(doc => doc.isDirty) ||
+            vscode.workspace.notebookDocuments.some(doc => doc.isDirty)) {
             throw new Error('Save or close unsaved files before switching branches.');
           }
           await this.reviews.checkout(node.pr.root, node.pr.branch.name, node.pr.branch.pr!.url);
@@ -247,7 +249,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
         const child = relative(root, path);
         if (child && child !== '..' && !child.startsWith('..' + sep) && !isAbsolute(child)) {
           document = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
-          const targetLine = thread.isOutdated ? thread.originalLine : thread.line;
+          const targetLine = workspaceReviewLine(thread);
           line = targetLine && Number.isSafeInteger(targetLine) && targetLine > 0 ? targetLine - 1 : 0;
           if (thread.isOutdated) { reason = 'Workspace file · Outdated comment; original line may have moved'; }
           else if (thread.diffSide === 'LEFT') { reason = 'Workspace file · Old-side comment; line is approximate'; }
