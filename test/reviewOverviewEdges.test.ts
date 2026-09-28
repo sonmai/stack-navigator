@@ -7,7 +7,7 @@ function fixture() {
   const warnings: string[] = [];
   const counters = { reveals: 0, checkouts: 0 };
   let rejectReveal = false;
-  const workspace = { textDocuments: [] as { isDirty: boolean }[], notebookDocuments: [] as { isDirty: boolean }[],
+  const workspace = { textDocuments: [] as any[], notebookDocuments: [] as any[],
     registerTextDocumentContentProvider: () => ({ dispose() {} }), onDidCloseTextDocument: () => ({ dispose() {} }) };
   const vscode = {
     workspace, EventEmitter: class { event = () => ({ dispose() {} }); fire() {} dispose() {} },
@@ -62,7 +62,8 @@ for (const kind of ['notebook', 'text'] as const) {
   test(`dirty ${kind} blocks checkout before any branch change`, async () => {
     const f = fixture();
     try {
-      (kind === 'notebook' ? f.workspace.notebookDocuments : f.workspace.textDocuments).push({ isDirty: true });
+      (kind === 'notebook' ? f.workspace.notebookDocuments : f.workspace.textDocuments).push({ isDirty: true,
+        uri: { scheme: 'file', fsPath: '/repo/dirty' }, getCells: () => [] });
       f.update(); await f.click();
       assert.equal(f.counters.checkouts, 0);
       assert.match(f.warnings[0], /Save or close unsaved files/);

@@ -3,6 +3,7 @@ import { realpath } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { NavState, StackBranch } from './core';
 import { ReviewPr, Reviews, ReviewThread, safeReviewPath, snapshotAnchor, workspaceReviewLine } from './reviews';
+import { hasUnsavedRepositoryDocuments } from './unsavedDocuments';
 
 interface PrNode { kind: 'pr'; root: string; branch: StackBranch; data?: ReviewPr; error?: string; loading?: boolean }
 interface ThreadNode { kind: 'thread'; pr: PrNode; thread: ReviewThread }
@@ -170,8 +171,10 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
         ? `${node.data.isDraft ? 'DRAFT' : node.data.state} · ${node.data.reviewDecision ?? 'No review decision'} · CI: ${node.data.checks ?? 'None'} · ${node.data.threads.filter(t => !t.isResolved).length} unresolved`
         : node.branch.pr!.state;
       if (node.branch.isCurrent) { item.description = `Current · ${item.description}`; }
+      if (node.data?.omittedThreads) { item.description += ` · ${node.data.omittedThreads} threads hidden (unsupported paths); counts exclude them`; }
       item.description += node.error ? ' · Load failed: click Refresh' : node.loading ? (node.data ? ' · Updating…' : ' · Loading reviews…') : '';
       item.tooltip = node.error ?? `${node.root}\n${node.branch.name}`;
+      if (node.data?.omittedThreads) { item.tooltip += `\n${node.data.omittedThreads} threads hidden because their paths are unsupported. The unresolved count covers visible threads only.`; }
       return item;
     }
     const first = node.thread.comments[0];
@@ -216,8 +219,7 @@ export class ReviewOverview implements vscode.TreeDataProvider<Node>, vscode.Dis
         let checkout = false;
         try {
           // Unsaved editors are not represented in Git's checkout safety checks.
-          if (vscode.workspace.textDocuments.some(doc => doc.isDirty) ||
-            vscode.workspace.notebookDocuments.some(doc => doc.isDirty)) {
+          if (await hasUnsavedRepositoryDocuments(node.pr.root, vscode.workspace.textDocuments, vscode.workspace.notebookDocuments)) {
             throw new Error('Save or close unsaved files before switching branches.');
           }
           await this.reviews.checkout(node.pr.root, node.pr.branch.name, node.pr.branch.pr!.url);

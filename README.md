@@ -80,7 +80,8 @@ The **Current** label marks the checked-out branch. A checkmark means the PR's r
 - Outdated comments and comments on the old side of a diff still open the workspace file, with a label warning that the line may have moved or is approximate. Missing line references open the file from the start.
 - If the workspace file is unavailable, the view falls back to a read-only PR revision or original diff excerpt, clearly labelled as a fallback.
 - Checkout never stashes, resets, rebases or forces changes. If blocked, choose **View read-only** to inspect the comment without completing checkout.
-- Unsaved text editors and notebooks must be saved or closed before checkout. The prototype checks all open documents conservatively.
+- Unsaved text editors and notebooks in the repository being checked out must be saved or closed. Untitled buffers and files in unrelated repositories do not block checkout.
+- Threads with unsupported paths are hidden with an explicit count; the unresolved count excludes those hidden threads. Other threads remain available.
 - Full replies are fetched only for the thread you click, along with fresh code coordinates.
 - Use the view's **Refresh** button to reload the local stack and reviews, including after a load failure. Existing reviews stay visible while updating within the same stack, and checkout within the same stack retains the cache. There is no periodic polling yet.
 - Reply, resolve, general PR conversation comments and advanced filters are not included. Only the selected thread is displayed by Stack Navigator.

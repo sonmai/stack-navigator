@@ -29,6 +29,25 @@ test('malformed comments fail explicitly before reaching the tree', async () => 
   await assert.rejects(service.read('/repo', 'https://github.com/o/r/pull/1'), /Invalid review comment/);
 });
 
+test('unsupported paths omit only their threads and expose an explicit omitted count', async () => {
+  const invalid = ['../outside.ts', 'name:part.ts', 'dir\\file.ts'];
+  const service = new Reviews(async () => payload([
+    ...invalid.map(path => ({ ...thread, path, comments: page([comment]) })),
+    { ...thread, comments: page([comment]) }
+  ]));
+  const result = await service.read('/repo', 'https://github.com/o/r/pull/1');
+  assert.equal(result.omittedThreads, 3);
+  assert.equal(result.threads.length, 1);
+  assert.equal(result.threads[0].path, thread.path);
+});
+
+test('selected unsupported thread still cannot be opened', async () => {
+  const service = new Reviews(async () => JSON.stringify({ data: { node: {
+    ...thread, path: '../outside.ts', pullRequest: { ...pr, url: 'https://github.com/o/r/pull/1' }, comments: page([comment])
+  } } }));
+  await assert.rejects(service.readThread('/repo', 'https://github.com/o/r/pull/1', 'T1'), /Invalid review thread/);
+});
+
 for (const selected of [false, true]) {
   for (const mode of ['cycle', 'limit', 'failure', 'missing cursor'] as const) {
     test(`${selected ? 'selected thread' : 'thread list'} rejects pagination ${mode}`, async () => {

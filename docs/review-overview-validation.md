@@ -41,6 +41,10 @@ gh-stack stack containing at least two PRs with review threads. Enable GitHub Pu
 - Leave an editor unsaved, then click a thread. Confirm checkout is blocked and read-only
   viewing remains available without discarding changes.
 - Repeat with a dirty notebook, including unsaved notebook metadata/output changes.
+- Confirm dirty files/notebooks in another repository and untitled buffers do not block checkout.
+- Confirm new files and symlink aliases into the selected repository still block checkout while dirty.
+- Confirm unsupported thread paths do not hide other threads; the PR row reports the hidden count
+  and explicitly indicates that unresolved counts exclude those threads.
 - Make changes that prevent Git switching branches. Confirm no stash/reset/force occurs.
 - Click threads rapidly. Confirm checkout operations do not overlap.
 - Switch branches outside the overview. Confirm the previously displayed native thread disappears.

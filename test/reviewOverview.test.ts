@@ -93,6 +93,8 @@ test('overview expands without checkout, opens selected native thread, and dispo
     assert.equal(checkouts, 0);
     await overview.getChildren(roots[1]); assert.equal(reads, 2, 'both PRs prefetched and cached when expanded again');
     const currentItem = overview.getTreeItem(roots[1]);
+    roots[1].data = { ...pr, omittedThreads: 2 };
+    assert.match(overview.getTreeItem(roots[1]).description, /2 threads hidden.*counts exclude them/);
     assert.equal(currentItem.iconPath.id, 'git-pull-request', 'checkout does not imply approval');
     assert.match(currentItem.description, /^Current ·/);
     roots[0].data = { ...pr, reviewDecision: 'APPROVED' };

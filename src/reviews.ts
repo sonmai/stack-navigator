@@ -27,6 +27,7 @@ export interface ReviewPr {
   headRefOid: string;
   checks?: string;
   threads: ReviewThread[];
+  omittedThreads?: number;
 }
 type Runner = typeof runGh;
 const commentFields = 'body author { login } url diffHunk originalCommit { oid }';
@@ -135,6 +136,10 @@ export class Reviews {
       result ??= parsePr(pr);
       const threads = connection(pr.reviewThreads);
       for (const raw of threads.nodes) {
+        if (typeof raw.path === 'string' && !safeReviewPath(raw.path)) {
+          result.omittedThreads = (result.omittedThreads ?? 0) + 1;
+          continue;
+        }
         const first = connection(raw.comments);
         const comments = first.nodes.map(node => parseComment(node, summary));
         const parsed = parseThread(raw, comments, first.totalCount);
