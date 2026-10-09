@@ -63,6 +63,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let busy = false;
   let reads: AbortController | undefined;
   let selectedRepository: GitRepository | undefined;
+  let pendingSelection: string | undefined;
   let updatePicker: (() => void) | undefined;
   let disposed = false;
   const overview = new ReviewOverview(async (root, action) => {
@@ -203,20 +204,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   async function refresh(): Promise<void> {
     if (disposed) { return; }
-    if (busy) { return; } // perform always refreshes after navigation completes.
+    if (busy) {
+      output.appendLine('Refresh skipped: navigation in progress.');
+      return; // perform always refreshes after navigation completes.
+    }
     const ticket = ++generation;
     reads?.abort();
     reads = new AbortController();
     const { signal } = reads;
+    const stale = (): boolean => {
+      if (!(signal.aborted || ticket !== generation)) { return false; }
+      output.appendLine('Refresh cancelled.');
+      return true;
+    };
+    const applySelection = (root?: string): void => {
+      if (pendingSelection === undefined) { return; }
+      const selected = pendingSelection;
+      pendingSelection = undefined;
+      if (selected !== root) {
+        output.appendLine(`Selected ${selected}, but using ${root ?? 'no repository'} because the active editor belongs to another repository.`);
+      }
+    };
     if (!api || git?.enabled === false) {
+      output.appendLine('Refresh stopped: built-in Git extension is unavailable.');
       state = { type: 'error', message: 'Enable the built-in Git extension and reload the window.' };
-      stateRoot = undefined; render(); return;
+      stateRoot = undefined; applySelection(undefined); render(); return;
     }
     const repo = activeRepository();
     const root = repo?.rootUri.fsPath;
     if (!root) {
+      output.appendLine(`Refresh: no repository (${api.repositories.length} open).`);
       state = { type: 'empty' };
       stateRoot = undefined;
+      applySelection(undefined);
       if (api.repositories.length > 1) { renderRepositorySelection(); }
       else { render(); }
       return;
@@ -224,32 +244,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try {
       const json = await cli.view(root, signal);
       const next = parseStack(json);
-      if (signal.aborted || ticket !== generation) { return; }
+      if (stale()) { return; }
+      if (next.type === 'empty') {
+        output.appendLine(`No stack layer for the current branch in ${root}.`);
+      }
       state = next;
       stateRoot = root;
+      applySelection(root);
       render();
       if (next.type === 'loaded' || next.type === 'trunk') { void loadTitles(next.stack, root, ticket, signal); }
     } catch (error) {
-      if (signal.aborted || ticket !== generation) { return; }
+      if (stale()) { return; }
       if (error instanceof CliError && error.exitCode === 6) {
         try {
           const choices = await localStacks.list(root, signal);
-          if (signal.aborted || ticket !== generation) { return; }
+          if (stale()) { return; }
           state = choices.length ? { type: 'stacks', choices }
             : { type: 'error', message: 'This branch belongs to multiple stacks. Check out a branch unique to a stack.' };
         } catch (listError) {
-          if (signal.aborted || ticket !== generation) { return; }
+          if (stale()) { return; }
           output.appendLine(`List stacks: ${String(listError)}`);
           state = { type: 'error', message: 'Could not list local stacks. Check Output → Stack Navigator, or check out a PR branch manually.' };
         }
       } else if (error instanceof CliError && error.exitCode === 2) {
         try {
           const pr = parseCurrentPr(await cli.currentPr(root, signal));
-          if (signal.aborted || ticket !== generation) { return; }
+          if (stale()) { return; }
+          output.appendLine(`No local stack in ${root}. Current PR #${pr.number}.`);
           state = { type: 'unloaded', pr };
         } catch (prError) {
+          if (stale()) { return; }
           output.appendLine(`PR lookup: ${String(prError)}`);
-          if (signal.aborted || ticket !== generation) { return; }
+          output.appendLine(`No local stack in ${root}, and the current branch has no PR.`);
           state = { type: 'empty' };
         }
       } else {
@@ -261,6 +287,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             : 'Could not read the stack. Check Output → Stack Navigator; click to retry.' };
       }
       stateRoot = root;
+      applySelection(root);
       render();
     }
   }
@@ -372,6 +399,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       })), { placeHolder: 'Choose the repository Stack Navigator should use', matchOnDescription: true });
       if (!chosen) { return; }
       selectedRepository = chosen.repository;
+      pendingSelection = chosen.repository.rootUri.fsPath;
+      output.appendLine(`Select repository: ${pendingSelection}`);
       await refresh();
     }),
     vscode.commands.registerCommand('stacknav.loadUrl', async () => {

@@ -119,7 +119,7 @@ Loading a remote stack uses `gh stack checkout`, which fetches branches and conf
 
 ## Troubleshooting
 
-- Open **Output**, then select **Stack Navigator** for command output and errors.
+- Open **Output**, then select **Stack Navigator** for command output and errors. A repository selection, a cancelled refresh, and a branch that is not in a local stack are written there too.
 - If the repository has multiple remotes, configure the intended remote, for example with `git config remote.pushDefault origin`.
 - If another local stack already tracks the same branches, resolve that conflict with `gh-stack` before loading the stack again.
 - Run **Stack Navigator: Refresh** to clear cached pull request titles and reload the current state.
