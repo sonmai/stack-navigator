@@ -20,10 +20,11 @@ test('host retains busy HEAD changes, replaces listeners, cancels stale reads an
   const api = { repositories: [a, b], onDidOpenRepository: opened.subscribe, onDidCloseRepository: closed.subscribe };
   const commands = new Map<string, (...args: any[]) => any>();
   const bars: any[] = [];
+  const logs: string[] = [];
   const window: any = {
     activeTextEditor: { document: { uri: { scheme: 'file', fsPath: '/a/file' } } },
     onDidChangeActiveTextEditor: editorChanged.subscribe,
-    createOutputChannel: () => ({ appendLine() {}, dispose() {} }),
+    createOutputChannel: () => ({ appendLine(line: string) { logs.push(line); }, dispose() {} }),
     createStatusBarItem: () => { const bar = { visible: false, show() { this.visible = true; }, hide() { this.visible = false; }, dispose() {} }; bars.push(bar); return bar; },
     showWarningMessage() {}, showErrorMessage() {}, showInformationMessage() {}
   };
@@ -103,6 +104,7 @@ test('host retains busy HEAD changes, replaces listeners, cancels stale reads an
     editorChanged.fire();
     assert.ok(staleSignal.aborted);
     await stale;
+    assert.ok(logs.includes('Refresh cancelled.'));
     holdRead = false;
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(calls.at(-1), '/b');
@@ -142,6 +144,8 @@ test('host retains busy HEAD changes, replaces listeners, cancels stale reads an
     window.showQuickPick = async (items: any[]) => items[1];
     await commands.get('stacknav.selectRepository')!();
     assert.equal(calls.at(-1), '/c');
+    assert.ok(logs.includes('Select repository: /c'));
+    assert.equal(logs.filter(line => line.startsWith('Selected /c')).length, 0);
     window.activeTextEditor = { document: { uri: { scheme: 'file', fsPath: '/a/file' } } };
     editorChanged.fire();
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -157,14 +161,29 @@ test('host retains busy HEAD changes, replaces listeners, cancels stale reads an
     editorChanged.fire();
     await commands.get('stacknav.refresh')!();
     assert.equal(calls.at(-1), '/a', 'sidebar/terminal focus retains the last repository');
+    window.activeTextEditor = { document: { uri: { scheme: 'file', fsPath: '/a/file' } } };
+    window.showQuickPick = async (items: any[]) => items.find((item: { description?: string }) => item.description === '/c');
+    await commands.get('stacknav.selectRepository')!();
+    assert.equal(calls.at(-1), '/a', 'an open file keeps its repository instead of the picker choice');
+    assert.ok(logs.some(line => line.startsWith('Selected /c, but using /a')));
+    window.activeTextEditor = undefined;
     StackCli.prototype.view = async () => { throw new CliError('not in stack', 2); };
     StackCli.prototype.currentPr = async () => JSON.stringify({ number: 7, url: 'https://github.com/o/r/pull/7' });
     await commands.get('stacknav.refresh')!();
     assert.equal(bars[1].text, '$(layers) Load stack for #7');
     assert.equal(bars[1].command, 'stacknav.load');
+    assert.ok(logs.includes('No local stack in /a. Current PR #7.'));
     StackCli.prototype.currentPr = async () => { throw new CliError('no PR', 1); };
     await commands.get('stacknav.refresh')!();
     assert.equal(bars[1].visible, false, 'no stack and no PR hides the status bar');
+    assert.ok(logs.includes('No local stack in /a, and the current branch has no PR.'));
+    StackCli.prototype.view = async () => JSON.stringify({
+      trunk: 'main', currentBranch: 'other',
+      branches: [{ name: 'feature', isCurrent: false, isMerged: false }]
+    });
+    await commands.get('stacknav.refresh')!();
+    assert.equal(bars[1].visible, false);
+    assert.ok(logs.includes('No stack layer for the current branch in /a.'));
   } finally {
     for (const subscription of subscriptions) { subscription.dispose(); }
     LocalStacks.prototype.list = originalList; LocalStacks.prototype.enter = originalEnter;
